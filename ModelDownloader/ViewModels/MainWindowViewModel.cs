@@ -388,9 +388,11 @@ namespace ModelDownloader.ViewModels
             catch (Exception ex)
             {
                 Debug.WriteLine(ex);
-                // 状态栏显示截断的原因,便于定位(如接口变更、解密失败等)
+                // 完整异常(含堆栈)输出到终端,便于定位(如接口变更、解密失败、转换越界等)
+                Console.Error.WriteLine($"[下载失败] {task.Title}\n{ex}");
+                // 状态栏显示截断的原因,便于定位(完整堆栈已输出到终端 stderr)
                 var reason = ex.Message.ReplaceLineEndings(" ");
-                task.StatusText = reason.Length > 40 ? "错误: " + reason[..40] + "…" : "错误: " + reason;
+                task.StatusText = reason.Length > 80 ? "错误: " + reason[..80] + "…" : "错误: " + reason;
                 return false;
             }
         }

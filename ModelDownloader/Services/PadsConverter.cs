@@ -93,12 +93,43 @@ public static class PadsConverter
 
         foreach (var a in Parse(oldDoc))
         {
-            if (S(a[0]) != "PIN") continue;
-            var number = S(a[1]);
-            var x = N(a[4]) * ToPads;
-            var y = -N(a[5]) * ToPads;
-            sb.Append("PIN ").Append(number).Append("  0  ")
-              .Append(F(x)).Append(' ').Append(F(y)).Append('\n');
+            switch (S(a[0]))
+            {
+                case "PIN":
+                {
+                    var number = S(a[1]);
+                    var x = N(a[4]) * ToPads;
+                    var y = -N(a[5]) * ToPads;
+                    sb.Append("PIN ").Append(number).Append("  0  ")
+                      .Append(F(x)).Append(' ').Append(F(y)).Append('\n');
+                    break;
+                }
+
+                case "POLY":
+                {
+                    // 旧符号格式:["POLY", id, points, rotation, lineStyle, filled]
+                    var pts = a.GetArrayLength() > 2 ? a[2] : default;
+                    if (pts.ValueKind != JsonValueKind.Array || pts.GetArrayLength() < 4) break;
+                    var px = new List<double>();
+                    var py = new List<double>();
+                    for (var i = 0; i + 1 < pts.GetArrayLength(); i++)
+                    {
+                        if (pts[i].ValueKind == JsonValueKind.Number)
+                        {
+                            px.Add(N(pts[i]) * ToPads);
+                            py.Add(-N(pts[i + 1]) * ToPads);
+                            i++;
+                        }
+                    }
+                    for (var i = 0; i + 1 < px.Count; i++)
+                    {
+                        sb.Append("L 0 0 0  ")
+                          .Append(F(px[i])).Append(' ').Append(F(py[i])).Append("  ")
+                          .Append(F(px[i + 1])).Append(' ').Append(F(py[i + 1])).Append("  1\n");
+                    }
+                    break;
+                }
+            }
         }
 
         return sb.ToString();

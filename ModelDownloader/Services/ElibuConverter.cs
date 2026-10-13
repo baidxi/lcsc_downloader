@@ -122,8 +122,13 @@ public static class ElibuConverter
         {
             switch (S(a[0]))
             {
+                case "FILL" when isSymbol && a.GetArrayLength() < 8:
+                    // 旧符号文档的 FILL 与封装 8 参数格式不同,暂不支持,跳过以防越界
+                    break;
+
                 case "FILL":
                 {
+                    if (a.GetArrayLength() < 8) break;
                     zIndex++; ticket++;
                     EmitPlaceholder(sb, isSymbol, ref ticket, placeholderSeen, "FILL", zIndex);
                     AppendLine(sb, "FILL", ticket, S(a[1]),
@@ -138,8 +143,25 @@ public static class ElibuConverter
                     break;
                 }
 
+                case "POLY" when isSymbol:
+                {
+                    // 旧符号格式:["POLY", id, path, rotation, lineStyle, filled]
+                    // path 为纯数字扁平点集(无 "L" 分隔),转为新版带 "L" 的 path;
+                    // 符号段无 LAYER 表,layerId 引用固定丝印层 3,线宽取默认 1mil。
+                    if (a.GetArrayLength() < 3 || a[2].ValueKind != JsonValueKind.Array) break;
+                    zIndex++; ticket++;
+                    EmitPlaceholder(sb, isSymbol, ref ticket, placeholderSeen, "POLY", zIndex);
+                    AppendLine(sb, "POLY", ticket, S(a[1]),
+                        "{\"groupId\":0,\"netName\":\"\",\"layerId\":3,\"width\":1" +
+                        ",\"path\":" + ToPathWithL(a[2]) +
+                        ",\"locked\":false,\"zIndex\":" + zIndex +
+                        ",\"polyType\":\"NORMAL\"}");
+                    break;
+                }
+
                 case "POLY":
                 {
+                    if (a.GetArrayLength() < 7) break;
                     zIndex++; ticket++;
                     EmitPlaceholder(sb, isSymbol, ref ticket, placeholderSeen, "POLY", zIndex);
                     AppendLine(sb, "POLY", ticket, S(a[1]),
@@ -155,6 +177,7 @@ public static class ElibuConverter
 
                 case "PAD" when !isSymbol:
                 {
+                    if (a.GetArrayLength() < 21) break;
                     zIndex++; ticket++;
                     EmitPlaceholder(sb, isSymbol, ref ticket, placeholderSeen, "PAD", zIndex);
                     AppendLine(sb, "PAD", ticket, S(a[1]),
@@ -181,6 +204,7 @@ public static class ElibuConverter
 
                 case "ATTR" when !isSymbol:
                 {
+                    if (a.GetArrayLength() < 21) break;
                     zIndex++; ticket++;
                     EmitPlaceholder(sb, isSymbol, ref ticket, placeholderSeen, "ATTR", zIndex);
                     AppendLine(sb, "ATTR", ticket, S(a[1]),
@@ -209,6 +233,7 @@ public static class ElibuConverter
 
                 case "ATTR" when isSymbol:
                 {
+                    if (a.GetArrayLength() < 10) break;
                     zIndex++; ticket++;
                     var parentId = S(a[2]);
                     AppendLine(sb, "ATTR", ticket, S(a[1]),
@@ -231,6 +256,7 @@ public static class ElibuConverter
 
                 case "RECT" when isSymbol:
                 {
+                    if (a.GetArrayLength() < 6) break;
                     zIndex++; ticket++;
                     EmitPlaceholder(sb, isSymbol, ref ticket, placeholderSeen, "RECT", zIndex);
                     AppendLine(sb, "RECT", ticket, S(a[1]),
@@ -248,6 +274,7 @@ public static class ElibuConverter
 
                 case "PIN" when isSymbol:
                 {
+                    if (a.GetArrayLength() < 8) break;
                     zIndex++; ticket++;
                     EmitPlaceholder(sb, isSymbol, ref ticket, placeholderSeen, "PIN", zIndex);
                     AppendLine(sb, "PIN", ticket, S(a[1]),
@@ -410,4 +437,33 @@ public static class ElibuConverter
     /// <summary>snap 值:0/缺失时回退默认 0.5,避免 0 导致网格异常。</summary>
     private static string Snap(string raw)
         => raw is "0" or "0.0" ? "0.5" : raw;
+
+    /// <summary>
+    /// 旧符号 path(纯数字扁平点集 [x1,y1,x2,y2,...])→ 新版 path 格式。
+    /// 官方新格式为 SVG 风格:首点为隐式 moveTo,其后紧跟一个 "L"(lineTo)标记,
+    /// 之后的所有坐标对均为 lineTo,即 [x1,y1,"L",x2,y2,x3,y3,...]。
+    /// 已含 "L" 的数组按原文保留。
+    /// </summary>
+    private static string ToPathWithL(JsonElement pts)
+    {
+        var sb = new StringBuilder("[");
+        var n = pts.GetArrayLength();
+        var lInserted = false;
+        for (var i = 0; i < n; i++)
+        {
+            var e = pts[i];
+            if (e.ValueKind == JsonValueKind.String)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append(Raw(e));
+                lInserted = true;
+                continue;
+            }
+            if (i == 2 && !lInserted) sb.Append(",\"L\",");
+            else if (i > 0) sb.Append(',');
+            sb.Append(Raw(e));
+        }
+        sb.Append(']');
+        return sb.ToString();
+    }
 }

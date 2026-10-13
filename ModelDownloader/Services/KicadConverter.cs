@@ -169,6 +169,34 @@ public static class KicadConverter
                     break;
                 }
 
+                case "POLY":
+                {
+                    // 旧符号格式:["POLY", id, points, rotation, lineStyle, filled]
+                    if (a.GetArrayLength() < 3 || a[2].ValueKind != JsonValueKind.Array) break;
+                    var pts = a[2];
+                    var filled = a.GetArrayLength() >= 6
+                                 && Math.Abs(N(a[a.GetArrayLength() - 1]) - 1) < 0.001;
+                    var qx = new List<double>();
+                    var qy = new List<double>();
+                    for (var i = 0; i + 1 < pts.GetArrayLength(); i++)
+                    {
+                        if (pts[i].ValueKind == JsonValueKind.Number)
+                        {
+                            qx.Add(N(pts[i]) * SymUnitToMm);
+                            qy.Add(-N(pts[i + 1]) * SymUnitToMm);
+                            i++;
+                        }
+                    }
+                    if (qx.Count < 2) break;
+                    body.Append("    (polyline (pts");
+                    for (var i = 0; i < qx.Count; i++)
+                        body.Append(" (xy ").Append(Fmt(qx[i])).Append(' ').Append(Fmt(qy[i])).Append(')');
+                    body.Append(") (stroke (width 0.254) (type default)) (fill (type ")
+                        .Append(filled ? "background" : "none")
+                        .Append(")))\n");
+                    break;
+                }
+
                 case "PIN":
                 {
                     var id = S(a[1]);

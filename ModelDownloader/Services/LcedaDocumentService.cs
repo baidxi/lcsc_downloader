@@ -163,28 +163,58 @@ public static class LcedaDocumentService
         return (text, detail);
     }
 
-    /// <summary>写入文本文件(UTF-8 无 BOM)。</summary>
+    /// <summary>写入文本文件(UTF-8 无 BOM)。目录不可写时抛出带路径的可操作错误。</summary>
     private static async Task WriteTextAsync(string targetFile, string text)
     {
         var directory = Path.GetDirectoryName(targetFile);
-        if (!string.IsNullOrEmpty(directory))
+        try
         {
-            Directory.CreateDirectory(directory);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+            await File.WriteAllTextAsync(targetFile, text, new UTF8Encoding(false));
         }
-        await File.WriteAllTextAsync(targetFile, text, new UTF8Encoding(false));
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or ArgumentException)
+        {
+            throw WriteAccessError(targetFile, directory, ex);
+        }
     }
 
     /// <summary>写入 .elibz2 压缩包:<名>.elibu(文档) + 固定名 json(元数据),与官方导出一致。</summary>
     private static async Task WriteElibz2Async(string targetFile, string jsonFileName, string elibuText, Elibz2Meta meta)
     {
         var directory = Path.GetDirectoryName(targetFile);
-        if (!string.IsNullOrEmpty(directory))
+        try
         {
-            Directory.CreateDirectory(directory);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or ArgumentException)
+        {
+            throw WriteAccessError(targetFile, directory, ex);
         }
 
-        using var zip = ZipFile.Open(targetFile, ZipArchiveMode.Create);
+        ZipArchive zip;
+        try
+        {
+            zip = ZipFile.Open(targetFile, ZipArchiveMode.Create);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            throw WriteAccessError(targetFile, directory, ex);
+        }
+        using (zip)
+        {
+            await WriteElibz2EntriesAsync(zip, targetFile, jsonFileName, elibuText, meta);
+        }
+    }
 
+    private static async Task WriteElibz2EntriesAsync(
+        ZipArchive zip, string targetFile, string jsonFileName, string elibuText, Elibz2Meta meta)
+    {
         var elibuEntry = zip.CreateEntry(Path.GetFileNameWithoutExtension(targetFile) + ".elibu");
         await using (var stream = elibuEntry.Open())
         {
@@ -199,4 +229,11 @@ public static class LcedaDocumentService
             await writer.WriteAsync(JsonSerializer.Serialize(meta, Elibz2JsonContext.Default.Elibz2Meta));
         }
     }
+
+    /// <summary>构造目录不可写/路径非法的友好错误(含目标路径与修复建议)。</summary>
+    private static Exception WriteAccessError(string targetFile, string? directory, Exception inner)
+        => new IOException(
+            $"无法写入 \"{targetFile}\"(目录: {directory ?? "<无>"}): {inner.Message}。" +
+            "请在设置中把该保存位置改为有写权限的目录,或修正目录权限。",
+            inner);
 }
