@@ -162,9 +162,11 @@ jobs:
           - runner: ubuntu-22.04
             rid: linux-x64
             appimage_arch: x86_64
+            deb_arch: amd64
           - runner: ubuntu-22.04-arm
             rid: linux-arm64
             appimage_arch: aarch64
+            deb_arch: arm64
     steps:
       - uses: actions/checkout@v7
 
@@ -210,11 +212,71 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=${{ matrix.appimage_arch }} \
             "$RUNNER_TEMP/appimagetool.AppImage" "$appdir" "ModelDownloader-${{ matrix.rid }}.AppImage"
 
+      - name: Pack deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$GITHUB_REF" == refs/tags/v* || ! "$version" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+            version="1.0.0"
+          fi
+
+          # 布局与根目录 Makefile 的 deb 目标保持一致：
+          #   程序      -> /opt/ModelDownloader/
+          #   启动脚本  -> /usr/bin/modeldownloader
+          #   桌面入口  -> /usr/share/applications/modeldownloader.desktop
+          #   图标      -> /usr/share/icons/hicolor/256x256/apps/modeldownloader.ico
+          staging="$RUNNER_TEMP/deb/modeldownloader"
+          mkdir -p "$staging/DEBIAN" \
+                   "$staging/opt/ModelDownloader" \
+                   "$staging/usr/bin" \
+                   "$staging/usr/share/applications" \
+                   "$staging/usr/share/icons/hicolor/256x256/apps"
+          cp -R "$RUNNER_TEMP/publish/." "$staging/opt/ModelDownloader/"
+          rm -f "$staging/opt/ModelDownloader/"*.pdb
+          chmod +x "$staging/opt/ModelDownloader/ModelDownloader"
+
+          cat > "$staging/usr/bin/modeldownloader" <<'LAUNCHER'
+          #!/bin/sh
+          exec /opt/ModelDownloader/ModelDownloader "$@"
+          LAUNCHER
+          chmod 755 "$staging/usr/bin/modeldownloader"
+
+          cat > "$staging/usr/share/applications/modeldownloader.desktop" <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=Model Downloader
+          Name[zh_CN]=模型下载器
+          Comment=立创商城 STEP 3D 模型下载器
+          Exec=/usr/bin/modeldownloader
+          Icon=/usr/share/icons/hicolor/256x256/apps/modeldownloader.ico
+          Terminal=false
+          Categories=Development;Engineering;
+          DESKTOP
+
+          cp ModelDownloader/Assets/logo256.ico \
+            "$staging/usr/share/icons/hicolor/256x256/apps/modeldownloader.ico"
+
+          cat > "$staging/DEBIAN/control" <<CONTROL
+          Package: modeldownloader
+          Version: $version
+          Section: utils
+          Priority: optional
+          Architecture: ${{ matrix.deb_arch }}
+          Maintainer: Juno <juno@localhost>
+          Description: 立创商城 STEP 3D 模型下载器
+           Avalonia 桌面应用，用于搜索并下载元器件 3D STEP 模型。
+          CONTROL
+
+          dpkg-deb --root-owner-group --build "$staging" "ModelDownloader-${{ matrix.rid }}.deb"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ModelDownloader-${{ matrix.rid }}
-          path: ModelDownloader-${{ matrix.rid }}.AppImage
+          path: |
+            ModelDownloader-${{ matrix.rid }}.AppImage
+            ModelDownloader-${{ matrix.rid }}.deb
           if-no-files-found: error
 
   create-release:
@@ -239,5 +301,7 @@ jobs:
             ModelDownloader-osx-arm64.dmg
             ModelDownloader-linux-x64.AppImage
             ModelDownloader-linux-arm64.AppImage
+            ModelDownloader-linux-x64.deb
+            ModelDownloader-linux-arm64.deb
           fail_on_unmatched_files: true
           generate_release_notes: true
