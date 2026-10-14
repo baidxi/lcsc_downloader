@@ -6,9 +6,9 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:ModelDownloader.ViewModels"
         Title=""
-        Width="720"
+        Width="860"
         Height="600"
-        MinWidth="720"
+        MinWidth="860"
         MinHeight="600"
         d:DesignHeight="450"
         d:DesignWidth="600"
@@ -267,8 +267,10 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" SharedSizeGroup="TitleColumn" />
                                 <ColumnDefinition Width="Auto" SharedSizeGroup="PartNumberColumn" />
-                                <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
     
                             <CheckBox Grid.Column="0"
@@ -290,10 +292,23 @@
                                        Text="{Binding PartNumber}" />
     
                             <TextBlock Grid.Column="3"
+                                       Margin="0,0,20,0"
                                        VerticalAlignment="Center"
                                        Text="{Binding Model.Attributes[Manufacturer]}" />
     
-                            <Button Grid.Column="4"
+                            <TextBlock Grid.Column="4"
+                                       Margin="0,0,20,0"
+                                       VerticalAlignment="Center"
+                                       Opacity="0.7"
+                                       Text="{Binding Stock}" />
+    
+                            <TextBlock Grid.Column="5"
+                                       Margin="0,0,20,0"
+                                       VerticalAlignment="Center"
+                                       Opacity="0.7"
+                                       Text="{Binding Price}" />
+    
+                            <Button Grid.Column="6"
                                     Padding="4"
                                     Background="{DynamicResource ButtonBorderlessBackground}"
                                     BorderThickness="0"

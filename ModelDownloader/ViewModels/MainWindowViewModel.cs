@@ -7,6 +7,9 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -20,7 +23,10 @@ namespace ModelDownloader.ViewModels
 {
     public partial class MainWindowViewModel : ViewModelBase
     {
-        private static HttpClient Client => new();
+        // 注意:必须是单例字段而非 "=> new()" 表达式属性。
+        // 若每次访问都新建 HttpClient,搜索/预览/下载高频触发时 socket(TIME_WAIT)持续累积,
+        // 耗尽临时端口后所有请求开始失败,表现为"某些元件突然无法下载",重启应用才恢复。
+        private static readonly HttpClient Client = new();
         [ObservableProperty] public partial ObservableCollection<string> SearchSource { get; set; } = [];
         [ObservableProperty] public partial string SelectedSearchSource { get; set; } = "立创商城";
         [ObservableProperty] public partial ModelSource? SelectedModelSource { get; set; } = null;
@@ -34,6 +40,13 @@ namespace ModelDownloader.ViewModels
         [ObservableProperty] public partial ObservableCollection<ResultItemViewModel> SearchResult { get; set; } = [];
         [ObservableProperty] public partial ResultItemViewModel? SelectedSearchResult { get; set; } = null;
         [ObservableProperty] public partial Bitmap? CurrentImageSource { get; set; } = null;
+
+        /// <summary>
+        /// 下载全局串行闸门。批量下载的多个元件常共用同一封装(目标文件同名),
+        /// 并发写入同一 zip 时 .NET 在 Unix 上会因 FileShare 冲突直接抛 IOException
+        /// (表现為"无法写入"),即使侥幸成功也会互相覆盖产出损坏的压缩包,故必须串行。
+        /// </summary>
+        private static readonly SemaphoreSlim DownloadGate = new(1, 1);
 
         private static readonly AppSettings LoadedSettings = AppSettings.Load();
 
@@ -180,6 +193,9 @@ namespace ModelDownloader.ViewModels
                         }
                     }
                 }
+
+                // 异步填充商城库存/单价(按元件编号匹配)
+                _ = LoadStockPricesAsync(keyword);
                 //else if (SelectedSearchSource == "嘉立创EDA")
                 //{
                 //    var res = await Client.GetFromJsonAsync<LCSCResult>("https://pro.lceda.cn/api/jlc/eda/product/list?wd=" + keyword);
@@ -195,6 +211,152 @@ namespace ModelDownloader.ViewModels
                 Debug.WriteLine(ex);
             }
         }
+
+        /// <summary>异步查询立创商城库存/单价,按元件编号回填到搜索结果。
+        /// 数据来自商城 PC 搜索页(SSR);首次请求会遇到 WAF 挑战,按其算法计算 Cookie 后重试。</summary>
+        private async Task LoadStockPricesAsync(string keyword)
+        {
+            try
+            {
+                var url = "https://so.szlcsc.com/global.html?k=" + Uri.EscapeDataString(keyword);
+                var html = await Client.GetStringAsync(url);
+
+                // WAF 挑战页:解析参数并计算 Cookie(tws2_{xvasu} = base64(RC4("tg09It3*9h", "{xvpts}:{xvasu}")))
+                if (html.Contains("_xvasu"))
+                {
+                    var cookie = SolveSzlcscChallenge(html);
+                    if (cookie == null) return;
+
+                    // 注意:不带 UA 才会返回旧版 SSR 页(产品库存/价格直出);带浏览器 UA 会返回新版前端页
+                    using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                    req.Headers.TryAddWithoutValidation("Cookie", cookie);
+                    using var resp = await Client.SendAsync(req);
+                    html = await resp.Content.ReadAsStringAsync();
+                }
+
+                // 页面中产品数据以 HTML 转义形式嵌入("productCode"),先反转义
+                html = System.Net.WebUtility.HtmlDecode(html);
+
+                var map = new Dictionary<string, (string Stock, string Price)>();
+                foreach (Match m in Regex.Matches(html, "\"stockNumber\":(\\d+)"))
+                {
+                    var stock = long.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+
+                    // 回溯定位包含该库存的产品 JSON 对象(括号配对找边界)
+                    int i = m.Index, p = i;
+                    while ((p = html.LastIndexOf('{', p - 1)) >= 0 && i - p < 60000)
+                    {
+                        int end = JsonEnd(html, p);
+                        if (end <= i) continue;
+
+                        JsonDocument doc;
+                        try
+                        {
+                            doc = JsonDocument.Parse(Encoding.UTF8.GetBytes(html.Substring(p, end - p + 1)));
+                        }
+                        catch (JsonException)
+                        {
+                            continue;
+                        }
+
+                        using (doc)
+                        {
+                            var root = doc.RootElement;
+                            if (root.ValueKind != JsonValueKind.Object ||
+                                !root.TryGetProperty("productCode", out var codeEl) ||
+                                !root.TryGetProperty("productPriceList", out var priceEl) ||
+                                priceEl.ValueKind != JsonValueKind.Array)
+                            {
+                                continue; // 起点不在产品对象上,继续向前回溯
+                            }
+
+                            var code = codeEl.GetString();
+                            if (string.IsNullOrEmpty(code)) continue;
+
+                            double price = 0;
+                            foreach (var item in priceEl.EnumerateArray())
+                            {
+                                if (item.TryGetProperty("productPrice", out var pv) && pv.TryGetDouble(out price) && price > 0)
+                                    break;
+                            }
+
+                            map[code] = (
+                                stock > 0 ? stock.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "—",
+                                price > 0 ? "¥" + price.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture) : "—");
+                            break;
+                        }
+                    }
+                }
+
+                foreach (var vm in SearchResult)
+                {
+                    if (vm.PartNumber != null && map.TryGetValue(vm.PartNumber, out var v))
+                    {
+                        vm.Stock = v.Stock;
+                        vm.Price = v.Price;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
+        }
+
+        /// <summary>扫描 JSON 对象边界:返回与起始 { 配对的 } 下标,-1 表示不配对。</summary>
+        private static int JsonEnd(string s, int start)
+        {
+            int depth = 0;
+            bool inStr = false, esc = false;
+            for (int i = start; i < s.Length; i++)
+            {
+                var c = s[i];
+                if (esc) { esc = false; continue; }
+                if (c == '\\') { esc = true; continue; }
+                if (c == '"') inStr = !inStr;
+                if (inStr) continue;
+                if (c == '{') depth++;
+                else if (c == '}' && --depth == 0) return i;
+            }
+            return -1;
+        }
+
+        /// <summary>从 WAF 挑战页计算 Cookie(变量顺序无关,已用真实样本对拍验证)。</summary>
+        private static string? SolveSzlcscChallenge(string html)
+        {
+            var vasu = Regex.Match(html, "_xvasu\\s*=\\s*(\\d+)");
+            var vpts = Regex.Match(html, "_xvpts\\s*=\\s*([\\d.]+)");
+            var vpfs = Regex.Match(html, "_xvpfs\\s*=\\s*\"([^\"]*)\"");
+            if (!vasu.Success || !vpts.Success || !vpfs.Success) return null;
+            return vpfs.Groups[1].Value + vasu.Groups[1].Value + "=" +
+                   Rc4Base64("tg09It3*9h", vpts.Groups[1].Value + ":" + vasu.Groups[1].Value);
+        }
+
+        /// <summary>RC4 加密后 Base64(与商城 WAF 挑战 JS 算法一致,已用真实样本对拍验证)。</summary>
+        private static string Rc4Base64(string key, string data)
+        {
+            var s = Enumerable.Range(0, 256).ToArray();
+            int j = 0;
+            var kb = Encoding.UTF8.GetBytes(key);
+            for (int i = 0; i < 256; i++)
+            {
+                j = (j + s[i] + kb[i % kb.Length]) & 255;
+                (s[i], s[j]) = (s[j], s[i]);
+            }
+
+            var db = Encoding.ASCII.GetBytes(data);
+            var output = new byte[db.Length];
+            int ii = 0, jj = 0;
+            for (int i = 0; i < db.Length; i++)
+            {
+                ii = (ii + 1) & 255;
+                jj = (jj + s[ii]) & 255;
+                (s[ii], s[jj]) = (s[jj], s[ii]);
+                output[i] = (byte)(db[i] ^ s[(s[ii] + s[jj]) & 255]);
+            }
+            return Convert.ToBase64String(output);
+        }
+
         private async Task PreviewModelAsync(ResultItem? item)
         {
             // 记录本次请求的目标,异步返回后校验,避免快速切换选中项时旧请求污染新状态
@@ -329,6 +491,21 @@ namespace ModelDownloader.ViewModels
 
         /// <summary>按选择下载一个条目的符号/封装/3D 模型(选项中该元件没有的项自动跳过)。</summary>
         private async Task ExecuteDownloadAsync(ResultItemViewModel item, DownloadSelection selection)
+        {
+            // 全局串行:批量下载的不同元件常共用同一封装(目标文件同名),
+            // 并发写入同一 zip 会因 FileShare 冲突抛"无法写入",即使成功也会互相覆盖产出损坏的压缩包
+            await DownloadGate.WaitAsync();
+            try
+            {
+                await ExecuteDownloadCoreAsync(item, selection);
+            }
+            finally
+            {
+                DownloadGate.Release();
+            }
+        }
+
+        private async Task ExecuteDownloadCoreAsync(ResultItemViewModel item, DownloadSelection selection)
         {
             var results = new List<bool>();
 
@@ -491,7 +668,10 @@ namespace ModelDownloader.ViewModels
             {
                 // Uncheck them from search results UI if visible
                 item.IsChecked = false;
-                _ = ExecuteDownloadAsync(item, selection);
+                // 顺序执行:同一封装被多个元件共用时目标文件同名,
+                // 并发写入会因 FileShare 冲突抛"无法写入"且可能产出损坏的压缩包
+                // (await 异步 IO,UI 线程不会阻塞)
+                await ExecuteDownloadAsync(item, selection);
             }
         }
 

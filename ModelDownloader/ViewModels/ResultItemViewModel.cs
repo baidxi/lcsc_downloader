@@ -16,6 +16,14 @@ public partial class ResultItemViewModel : ObservableObject
             ? p
             : Model.ProductCode;
 
+    /// <summary>商城库存(异步填充;接口未提供时显示 —)</summary>
+    [ObservableProperty]
+    public partial string Stock { get; set; } = "—";
+
+    /// <summary>商城单价(异步填充;接口未提供时显示 —)</summary>
+    [ObservableProperty]
+    public partial string Price { get; set; } = "—";
+
     public ResultItemViewModel(ResultItem model)
     {
         Model = model;

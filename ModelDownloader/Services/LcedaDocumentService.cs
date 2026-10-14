@@ -200,6 +200,13 @@ public static class LcedaDocumentService
         ZipArchive zip;
         try
         {
+            // .NET 10 起 ZipArchiveMode.Create 在 Unix 上以 O_CREAT|O_EXCL 打开,
+            // 目标文件已存在时抛 IOException("already exists"),不再静默覆盖;
+            // 本工具语义为"覆盖下载",先删除旧文件再创建。
+            if (File.Exists(targetFile))
+            {
+                File.Delete(targetFile);
+            }
             zip = ZipFile.Open(targetFile, ZipArchiveMode.Create);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)

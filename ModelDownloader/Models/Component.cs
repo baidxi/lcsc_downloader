@@ -277,12 +277,65 @@ public class DataStrContent
     public string? Unit { get; set; }
 }
 
+// 立创商城手机端搜索(库存/价格数据源;部分商品字段可能缺省)
+public class SzlcscSearchResult
+{
+    [JsonPropertyName("code")]
+    public int Code { get; set; }
+
+    [JsonPropertyName("result")]
+    public SzlcscSearchData? Result { get; set; }
+}
+
+public class SzlcscSearchData
+{
+    [JsonPropertyName("productList")]
+    public List<SzlcscProduct>? ProductList { get; set; }
+}
+
+public class SzlcscProduct
+{
+    [JsonPropertyName("code")]
+    public string? Code { get; set; }
+
+    [JsonPropertyName("model")]
+    public string? Model { get; set; }
+
+    [JsonPropertyName("totalStockNumber")]
+    public long TotalStockNumber { get; set; }
+
+    [JsonPropertyName("priceList")]
+    public List<SzlcscPrice>? PriceList { get; set; }
+
+    [JsonPropertyName("priceDiscount")]
+    public SzlcscPriceDiscount? PriceDiscount { get; set; }
+}
+
+public class SzlcscPrice
+{
+    [JsonPropertyName("lascPrice")]
+    public double? LascPrice { get; set; }
+
+    [JsonPropertyName("price")]
+    public double? Price { get; set; }
+
+    [JsonPropertyName("spNumber")]
+    public long SpNumber { get; set; }
+}
+
+public class SzlcscPriceDiscount
+{
+    [JsonPropertyName("priceList")]
+    public List<SzlcscPrice>? PriceList { get; set; }
+}
+
 [JsonSerializable(typeof(LCSCResult))]
 [JsonSerializable(typeof(ResultItem))]
 [JsonSerializable(typeof(FootprintInfo))]
 [JsonSerializable(typeof(Model3DComponent))]
 [JsonSerializable(typeof(Model3DDetail))]
 [JsonSerializable(typeof(AppSettings))]
+[JsonSerializable(typeof(SzlcscSearchResult))]
 public partial class CustomJsonSerializerContext : JsonSerializerContext
 {
 }
