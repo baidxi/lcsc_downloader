@@ -41,6 +41,16 @@ public static class PadsConverter
                     break;
                 }
 
+                case "FILL":
+                {
+                    // 实心填充体(引脚焊接层 50 / 文档层 13 等) → 闭合多边形线段;
+                    // 49 为 3D 标记层,与 KiCad 输出策略一致,跳过。
+                    var layer = (int)N(a[4]);
+                    if (layer == 49) break;
+                    AppendFillPolygon(sb, a[7]);
+                    break;
+                }
+
                 case "POLY":
                 {
                     var width = Math.Max(N(a[5]) * ToPads, 1);
@@ -81,6 +91,62 @@ public static class PadsConverter
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// FILL path → 闭合多边形 L 段。
+    /// path 可能为扁平点集 [x1,y1,"L",x2,y2,...](首元素为数字)或形状数组 [["CIRCLE",..],["L",..],..];
+    /// 仅输出折线形状,圆等暂不支持(PADS ASCII 无公开规范,本实现为实验性质)。
+    /// </summary>
+    private static void AppendFillPolygon(StringBuilder sb, JsonElement path)
+    {
+        if (path.ValueKind != JsonValueKind.Array || path.GetArrayLength() == 0) return;
+
+        if (path[0].ValueKind == JsonValueKind.Number)
+        {
+            EmitClosedPolygon(sb, path);
+            return;
+        }
+
+        foreach (var shape in path.EnumerateArray())
+        {
+            if (shape.ValueKind == JsonValueKind.Array
+                && shape.GetArrayLength() > 0 && S(shape[0]) == "L")
+            {
+                EmitClosedPolygon(sb, shape);
+            }
+        }
+    }
+
+    /// <summary>输出折线各段,并在首尾未闭合时补一段闭合线。</summary>
+    private static void EmitClosedPolygon(StringBuilder sb, JsonElement pts)
+    {
+        var px = new List<double>();
+        var py = new List<double>();
+        for (var i = 0; i + 1 < pts.GetArrayLength(); i++)
+        {
+            if (pts[i].ValueKind == JsonValueKind.Number)
+            {
+                px.Add(N(pts[i]) * ToPads);
+                py.Add(N(pts[i + 1]) * ToPads);
+                i++;
+            }
+        }
+        if (px.Count < 2) return;
+
+        for (var i = 0; i + 1 < px.Count; i++)
+        {
+            sb.Append("L 0 0 0  ")
+              .Append(F(px[i])).Append(' ').Append(F(py[i])).Append("  ")
+              .Append(F(px[i + 1])).Append(' ').Append(F(py[i + 1])).Append("  1\n");
+        }
+
+        if (Math.Abs(px[^1] - px[0]) > 0.5 || Math.Abs(py[^1] - py[0]) > 0.5)
+        {
+            sb.Append("L 0 0 0  ")
+              .Append(F(px[^1])).Append(' ').Append(F(py[^1])).Append("  ")
+              .Append(F(px[0])).Append(' ').Append(F(py[0])).Append("  1\n");
+        }
     }
 
     /// <summary>符号文档 → *PART* 段(实验性)。</summary>

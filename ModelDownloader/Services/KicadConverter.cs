@@ -92,7 +92,10 @@ public static class KicadConverter
                     {
                         5 => "F.Mask", 6 => "B.Mask",
                         7 => "F.Paste", 8 => "B.Paste",
-                        _ => "F.Fab"
+                        9 => "F.Fab", 10 => "B.Fab",       // 装配层
+                        11 => "Edge.Cuts",                  // 板框
+                        13 => "User.Drawings",              // 文档层(注释/方向标记)
+                        _ => "F.Fab"                        // 48 元件体 / 50 引脚焊接层等
                     };
                     AppendFills(body, a[7], kLayer);
                     break;
@@ -329,10 +332,23 @@ public static class KicadConverter
         }
     }
 
-    /// <summary>FILL path → fp_poly / fp_circle(实心填充)。</summary>
+    /// <summary>
+    /// FILL path → fp_poly / fp_circle(实心填充)。
+    /// path 存在两种形态:扁平点集 [x1,y1,"L",x2,y2,...](整体为一个多边形)
+    /// 或形状数组 [["CIRCLE",cx,cy,r],["L",x1,y1,x2,y2,...],..],两种均需处理,
+    /// 否则多数封装的实心填充(引脚焊接层/文档层标记)会整体丢失。
+    /// </summary>
     private static void AppendFills(StringBuilder sb, JsonElement path, string layer)
     {
-        if (path.ValueKind != JsonValueKind.Array) return;
+        if (path.ValueKind != JsonValueKind.Array || path.GetArrayLength() == 0) return;
+
+        // 扁平点集:首元素为数字,整体作为一个实心多边形
+        if (path[0].ValueKind == JsonValueKind.Number)
+        {
+            AppendFillPoly(sb, path, layer);
+            return;
+        }
+
         foreach (var shape in path.EnumerateArray())
         {
             if (shape.ValueKind != JsonValueKind.Array || shape.GetArrayLength() == 0) continue;
@@ -351,18 +367,24 @@ public static class KicadConverter
 
             if (shape[0].ValueKind == JsonValueKind.Number && shape.GetArrayLength() >= 6)
             {
-                sb.Append("  (fp_poly (pts");
-                for (var i = 0; i + 1 < shape.GetArrayLength(); i++)
-                {
-                    if (shape[i].ValueKind != JsonValueKind.Number) continue;
-                    sb.Append(" (xy ").Append(Fmt(N(shape[i]) * MilToMm)).Append(' ')
-                        .Append(Fmt(N(shape[i + 1]) * MilToMm)).Append(')');
-                    i++;
-                }
-                sb.Append(") (stroke (width 0.05) (type solid)) (fill solid) (layer \"")
-                    .Append(layer).Append("\"))\n");
+                AppendFillPoly(sb, shape, layer);
             }
         }
+    }
+
+    /// <summary>扁平点集 → 单个 fp_poly(跳过 "L" 等非数字标记,相邻坐标成点)。</summary>
+    private static void AppendFillPoly(StringBuilder sb, JsonElement pts, string layer)
+    {
+        sb.Append("  (fp_poly (pts");
+        for (var i = 0; i + 1 < pts.GetArrayLength(); i++)
+        {
+            if (pts[i].ValueKind != JsonValueKind.Number) continue;
+            sb.Append(" (xy ").Append(Fmt(N(pts[i]) * MilToMm)).Append(' ')
+                .Append(Fmt(N(pts[i + 1]) * MilToMm)).Append(')');
+            i++;
+        }
+        sb.Append(") (stroke (width 0.05) (type solid)) (fill solid) (layer \"")
+            .Append(layer).Append("\"))\n");
     }
 
     /// <summary>封装层号 → KiCad 层名。</summary>
@@ -376,7 +398,10 @@ public static class KicadConverter
         5 => "F.Mask",
         8 => "B.Paste",
         7 => "F.Paste",
+        9 => "F.Fab",
+        10 => "B.Fab",
         11 => "Edge.Cuts",
+        13 => "User.Drawings",   // 文档层(注释/方向标记)
         48 or 49 or 50 => "F.Fab",
         _ => "F.SilkS"
     };
