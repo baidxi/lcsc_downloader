@@ -45,14 +45,17 @@ public class TagInfo
     public string? NameCn { get; set; }
 }
 
-// 主标签和子标签容器
+// 主标签和子标签容器。
+// 注意:不同元件返回结构不一致——大多数返回对象,
+// 部分元件(如 C99009)返回空数组 [],用 TagInfo 强类型接收会反序列化失败,
+// 导致整个搜索结果 JSON 解析抛异常而"搜不到",因此用 object 接收以兼容任意 JSON 值。
 public class TagsContainer
 {
     [JsonPropertyName("parent_tag")]
-    public TagInfo? ParentTag { get; set; }
+    public object? ParentTag { get; set; }
 
     [JsonPropertyName("child_tag")]
-    public TagInfo? ChildTag { get; set; }
+    public object? ChildTag { get; set; }
 }
 
 // 符号信息
